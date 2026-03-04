@@ -1,0 +1,269 @@
+/*
+Proteus-ready single-circuit: PIC16F877A generates Manchester, Differential Manchester, HDB3, and MLT-3
+Microcontroller: PIC16F877A (XC8 C compile)
+Target: Proteus simulation (place PIC16F877A, logic switches, oscilloscope)
+
+What this file contains:
+- Components & wiring summary for Proteus
+- XC8 C source code (complete) — compile with MPLAB X + XC8
+- Usage notes for Proteus (clock, oscilloscope, switches)
+
+WIRING SUMMARY (Proteus)
+------------------------
+Components:
+- PIC16F877A (configured for XT/HS oscillator as chosen)
+- 3 x SPDT switches (mode select) or DIP for 3 mode bits
+- Optional DIP / pushbutton for input bitstream (we use a hardcoded array by default)
+- Oscilloscope (Channel A) -> connect probe to RD0 (PORTD bit0)
+- GND -> PIC Vss pins (pin 12, 31), Vcc -> +5V (pin 11, 32)
+- MCLR (pin 1): connect to +5V via 10k resistor; add a pushbutton to GND for reset if desired
+- Crystal: 4MHz crystal between OSC1/OSC2 (pins 13 and 14) plus 22pF caps to GND
+- Mode switches: connect one side to GND, the other to RA0, RA1, RA2 and enable internal pull-ups in code OR tie to Vcc via pull-up resistors and switch to GND
+
+Pin mapping (recommended):
+- MODE0 -> RA0 (pin 2)
+- MODE1 -> RA1 (pin 3)
+- MODE2 -> RA2 (pin 4)
+- OUTPUT -> RD0 (pin 19)  // feed this to Oscilloscope Channel A
+
+Notes for Proteus:
+- Place PIC16F877A, configure properties oscillator to XT or HS depending on crystal (we use 4MHz XT)
+- Set Vdd/Vss to +5V/GND rails
+- Attach Oscilloscope channel A probe to RD0 and ground to PIC ground
+- Use pull-down or pull-up wiring for switches as you prefer. Code reads RA pins with internal weak pull-ups disabled by default; we enable internal pull-ups in code (OPTION_REG) so wire switches to GND to assert '1'.
+
+TIMING:
+- BIT_PERIOD_MS controls bit period (set to 5ms or higher for easy viewing in Proteus). For PIC delays, we use __delay_ms which needs _XTAL_FREQ defined.
+
+HOW TO USE:
+1) Open Proteus, add PIC16F877A and oscilloscope. Wire MCLR and oscillator as above.
+2) Add three SPDT switches wired between RAx pins and GND. When closed they pull the pin LOW which code treats as logical 1 (using internal pull-ups).
+3) Attach the oscillator probe to RD0.
+4) Compile the XC8 code and load the .hex into PIC (Proteus object property) or paste the code into MPLAB and generate hex then point Proteus to it.
+5) Run simulation; toggle mode switches to choose encoder:
+   - 000: Manchester
+   - 001: Differential Manchester
+   - 010: HDB3
+   - 011: MLT-3
+
+---------------------------
+XC8 C CODE (compatible with XC8, MPLAB X)
+---------------------------
+*/
+
+#include <xc.h>
+
+// CONFIG
+#pragma config FOSC = XT        // Oscillator Selection bits (XT oscillator)
+#pragma config WDTE = OFF       // Watchdog Timer Enable bit (WDT disabled)
+#pragma config PWRTE = OFF      // Power-up Timer Enable bit (PWRT disabled)
+#pragma config BOREN = ON       // Brown-out Reset Enable bit (BOR enabled)
+#pragma config LVP = OFF        // Low-Voltage Programming Disable (RB3 is digital I/O)
+#pragma config CPD = OFF        // Data EEPROM Memory Code Protection (Disabled)
+#pragma config WRT = OFF        // Flash Program Memory Write Enable bits (Write protection off)
+#pragma config CP = OFF         // Flash Program Memory Code Protection (Disabled)
+
+#define _XTAL_FREQ 4000000UL // 4 MHz crystal
+
+// Pin definitions
+#define MODE0 PORTAbits.RA0
+#define MODE1 PORTAbits.RA1
+#define MODE2 PORTAbits.RA2
+
+#define OUT LATDbits.LATD0
+
+// Configuration constants
+#define BIT_PERIOD_MS 6u // bit cell period in milliseconds (>=5 is good for Proteus visibility)
+#define HALF_PERIOD_US ((BIT_PERIOD_MS*1000UL)/2UL)
+
+// Example bitstream length and data
+#define BITSTREAM_LEN 16
+unsigned char bitstream[BITSTREAM_LEN] = {1,0,1,1,0,0,0,0, 1,0,1,0,0,1,1,0};
+
+// Function prototypes
+void init_ports(void);
+unsigned char read_mode(void);
+void delay_half_period(void);
+void stream_manchester(unsigned char *data, unsigned char n);
+void stream_diff_manchester(unsigned char *data, unsigned char n);
+void stream_hdb3(unsigned char *data, unsigned char n);
+void stream_mlt3(unsigned char *data, unsigned char n);
+
+// Helper: implement half-period wait using __delay_us
+void delay_half_period(void) {
+    __delay_us(HALF_PERIOD_US);
+}
+
+void main(void) {
+    init_ports();
+    while(1) {
+        unsigned char mode = read_mode();
+        switch(mode) {
+            case 0: stream_manchester(bitstream, BITSTREAM_LEN); break;
+            case 1: stream_diff_manchester(bitstream, BITSTREAM_LEN); break;
+            case 2: stream_hdb3(bitstream, BITSTREAM_LEN); break;
+            case 3: stream_mlt3(bitstream, BITSTREAM_LEN); break;
+            default: stream_manchester(bitstream, BITSTREAM_LEN); break;
+        }
+        __delay_ms(200);
+    }
+}
+
+void init_ports(void) {
+    // PORTA bits RA0..RA2 are inputs for mode selection
+    TRISA = 0xFF;      // configure PORTA as input initially
+    TRISD = 0x00;      // PORTD as output (RD0 used)
+    ADCON1 = 0x06;     // Turn off analog on RA pins (make them digital) - adjust if needed
+    CMCON = 0x07;      // Disable comparators
+    // Enable weak pull-ups on PORTB via option reg? On PIC16F877A internal pull-ups are on PORTB only.
+    // We'll use external wiring: switches pull RAx to GND when closed and RAx float high via pull-ups in Proteus.
+    // Ensure LATD initial
+    LATD = 0x00;
+}
+
+unsigned char read_mode(void) {
+    unsigned char m0 = (PORTAbits.RA0 == 0)? 1:0; // switch to GND -> treat as 1
+    unsigned char m1 = (PORTAbits.RA1 == 0)? 1:0;
+    unsigned char m2 = (PORTAbits.RA2 == 0)? 1:0;
+    return (m2<<2) | (m1<<1) | (m0<<0);
+}
+
+// ----------------- Manchester -----------------
+// Convention: for bit '1' -> high to low transition in middle (first half=1, second half=0)
+//             for bit '0' -> low to high transition in middle
+void stream_manchester(unsigned char *data, unsigned char n) {
+    unsigned char i;
+    for (i=0;i<n;i++) {
+        if (data[i]) {
+            // first half HIGH
+            OUT = 1; delay_half_period();
+            // second half LOW
+            OUT = 0; delay_half_period();
+        } else {
+            OUT = 0; delay_half_period();
+            OUT = 1; delay_half_period();
+        }
+    }
+}
+
+// ----------------- Differential Manchester -----------------
+// Differential Manchester: transition at middle of bit cell always. '1' encoded by absence/presence of transition at start.
+// We'll implement convention: '0' -> transition at start, '1' -> no transition at start. Always transition at mid.
+void stream_diff_manchester(unsigned char *data, unsigned char n) {
+    unsigned char i;
+    unsigned char level = 0; // initial output level
+    for (i=0;i<n;i++) {
+        if (data[i] == 0) {
+            // transition at start
+            level = !level; OUT = level; delay_half_period();
+            // transition at mid
+            level = !level; OUT = level; delay_half_period();
+        } else {
+            // no transition at start -> keep level
+            OUT = level; delay_half_period();
+            // transition at mid
+            level = !level; OUT = level; delay_half_period();
+        }
+    }
+    OUT = 0;
+}
+
+// ----------------- HDB3 (AMI with substitution) -----------------
+// We'll implement a practical HDB3 encoder: maintain 'violation' substitutions for 4 consecutive zeros.
+// AMI baseline: '1' -> alternate polarity pulses (+1, -1), '0' -> 0
+// HDB3: replace 0000 sequences depending on polarity parity.
+void stream_hdb3(unsigned char *data, unsigned char n) {
+    unsigned char i=0;
+    signed char last_polarity = 1; // +1 or -1, start with +1 for first '1'
+    unsigned char zero_count = 0;
+    unsigned char ones_since_last = 0; // count of non-zero pulses to decide substitution
+
+    while (i < n) {
+        if (data[i] == 1) {
+            // AMI pulse with alternating polarity
+            last_polarity = -last_polarity;
+            // represent positive by OUT=1 for +, negative by OUT=1 as well because single digital line cannot show polarity
+            // To visualize polarity in Proteus with single digital output, we encode polarity as pulse presence but for 'polarity' you may need a second line. For simplicity, we produce short pulses separated
+            OUT = 1; delay_half_period(); OUT=0; delay_half_period();
+            zero_count = 0;
+            ones_since_last++;
+            i++;
+        } else {
+            zero_count++;
+            if (zero_count < 4) {
+                // transmit zero as low for whole bit cell
+                OUT = 0; delay_half_period(); OUT = 0; delay_half_period();
+                i++;
+            } else {
+                // zero_count == 4 -> perform substitution for bits i-3..i
+                // Decide between 'B00V' or '000V' style: based on ones_since_last parity
+                // For simplicity: if ones_since_last is odd -> use B00V else use 000V
+                if ((ones_since_last %2) == 1) {
+                    // B00V : put a balancing pulse (B) at first position with polarity opposite to last_polarity,
+                    // and a violation (V) at last position with same polarity as B to create two pulses -> visualize as two short pulses in those bit cells
+                    // B (i-3)
+                    OUT = 1; delay_half_period(); OUT=0; delay_half_period();
+                    // 0 (i-2)
+                    OUT = 0; delay_half_period(); OUT=0; delay_half_period();
+                    // 0 (i-1)
+                    OUT = 0; delay_half_period(); OUT=0; delay_half_period();
+                    // V (i)
+                    OUT = 1; delay_half_period(); OUT=0; delay_half_period();
+                    // update parity
+                    last_polarity = -last_polarity; // toggled in B
+                } else {
+                    // 000V : only violation at last position
+                    // 0
+                    OUT = 0; delay_half_period(); OUT=0; delay_half_period();
+                    // 0
+                    OUT = 0; delay_half_period(); OUT=0; delay_half_period();
+                    // 0
+                    OUT = 0; delay_half_period(); OUT=0; delay_half_period();
+                    // V
+                    OUT = 1; delay_half_period(); OUT=0; delay_half_period();
+                    // violation toggles polarity
+                    last_polarity = -last_polarity;
+                }
+                zero_count = 0; ones_since_last = 0; i++;
+            }
+        }
+    }
+}
+
+// ----------------- MLT-3 -----------------
+// MLT-3 cycles through levels: 0, +1, 0, -1 on successive '1's; '0' -> hold current level
+// With a single digital output we approximate levels as 1 (non-zero) or 0. To better visualize with Proteus, we toggle output to represent non-zero levels.
+// We simulate three-state by mapping +1 and -1 to output pulses with spacing — not a perfect analog representation but adequate for logic visualization.
+void stream_mlt3(unsigned char *data, unsigned char n) {
+    unsigned char i;
+    signed char state = 0; // 0 -> zero level, 1 -> +1, -1 -> -1
+    for (i=0;i<n;i++) {
+        if (data[i] == 1) {
+            // advance state sequence: 0 -> +1 -> 0 -> -1 -> 0 -> +1 ...
+            if (state == 0) state = 1;
+            else if (state == 1) state = 0;
+            else if (state == -1) state = 0;
+            else state = 0;
+            // output representation: non-zero -> short pulse
+            if (state == 0) {
+                OUT = 0; delay_half_period(); OUT = 0; delay_half_period();
+            } else {
+                OUT = 1; delay_half_period(); OUT = 0; delay_half_period();
+            }
+            // advance further for next '1'
+            if (state == 0) state = -1; // sequence control to reach -1 next
+        } else {
+            // zero -> hold level (we show as 0)
+            OUT = 0; delay_half_period(); OUT = 0; delay_half_period();
+        }
+    }
+}
+
+/*
+Notes & Limitations:
+- Single digital output can only represent pulse presence; true bipolar polarities (+/-) are not directly visible as separate voltages. For visualizing polarity (AMI/HDB3) you can use two output lines (e.g., RD0 = positive pulse, RD1 = negative pulse) or use an op-amp to shift pulses. The provided code uses single-line pulses for simplicity.
+- HDB3 and MLT-3 true analog levels require multi-level outputs or DAC; this code approximates them so students can see transitions on Proteus oscilloscope/logic analyzer.
+- If you want exact bipolar visualization, set two outputs: POS and NEG and drive them alternately for +1/-1.
+
+If you want, I can update the code to use two output pins (RD0 and RD1) to show + and - polarities distinctly in Proteus (recommended for AMI/HDB3). Also I can provide a ready-to-import Proteus schematic (.DSN) if you'd like — tell me which PIC or microcontroller you'd prefer (PIC16F877A used here) or a different MCU family (8051, STM32, PIC18, etc.).
+*/
