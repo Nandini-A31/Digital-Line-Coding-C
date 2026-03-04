@@ -15,6 +15,6 @@ This project implements digital line coding techniques using PIC16F877A microcon
 - Simulated using Proteus
 
 ## Tools Used
--Micro c pro for pic 
+- Micro c pro for pic 
 - Proteus
 - PIC16F877A
