@@ -259,11 +259,6 @@ void stream_mlt3(unsigned char *data, unsigned char n) {
     }
 }
 
-/*
-Notes & Limitations:
-- Single digital output can only represent pulse presence; true bipolar polarities (+/-) are not directly visible as separate voltages. For visualizing polarity (AMI/HDB3) you can use two output lines (e.g., RD0 = positive pulse, RD1 = negative pulse) or use an op-amp to shift pulses. The provided code uses single-line pulses for simplicity.
-- HDB3 and MLT-3 true analog levels require multi-level outputs or DAC; this code approximates them so students can see transitions on Proteus oscilloscope/logic analyzer.
-- If you want exact bipolar visualization, set two outputs: POS and NEG and drive them alternately for +1/-1.
 
-If you want, I can update the code to use two output pins (RD0 and RD1) to show + and - polarities distinctly in Proteus (recommended for AMI/HDB3). Also I can provide a ready-to-import Proteus schematic (.DSN) if you'd like — tell me which PIC or microcontroller you'd prefer (PIC16F877A used here) or a different MCU family (8051, STM32, PIC18, etc.).
-*/
+
+
